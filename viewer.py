@@ -1,9 +1,12 @@
 import sys
 import os
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
-    QWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QDoubleSpinBox, 
-    QComboBox, QGroupBox, QMessageBox)
-from PyQt5.QtCore import Qt
+import shutil
+import logging
+from typing import Optional, Tuple
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
+    QWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QDoubleSpinBox,
+    QComboBox, QGroupBox, QMessageBox, QProgressDialog)
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
 import vtk
 from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
@@ -13,281 +16,334 @@ from stl import mesh
 import tempfile
 from datetime import datetime
 
-def rgb2gray(image_path, save_path, invert=False):
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Constants
+DEFAULT_WIDTH = 100
+DEFAULT_HEIGHT = 100
+PREVIEW_SIZE = 300
+MAX_DIMENSION = 1000
+MIN_DIMENSION = 1
+DEFAULT_BASE_HEIGHT = 2.0
+DEFAULT_MAX_HEIGHT = 4.0
+DEFAULT_MIN_THICKNESS = 0.5
+PREVIEW_DEBOUNCE_MS = 500
+
+def rgb2gray(image_path: str, save_path: str, invert: bool = False) -> str:
     """
     Converts image from RGB to Grayscale.
-    
+
     Args:
-        image_path (str): Input image file path
-        save_path (str): Directory to save the processed image
-        invert (bool): Whether to invert the image
-    
+        image_path: Input image file path
+        save_path: Directory to save the processed image
+        invert: Whether to invert the image
+
     Returns:
-        str: Path of the converted image
+        Path of the converted image
+
+    Raises:
+        FileNotFoundError: If input image does not exist
+        IOError: If image cannot be processed or saved
     """
-    # Open image
-    with Image.open(image_path) as img:
-        # Convert RGB to grayscale
-        gray_img = img.convert('L')
-        
-        # Invert if requested
-        if invert:
-            gray_img = ImageOps.invert(gray_img)
-        
-        # Generate new filename
-        new_filename = f"grayscale.png"
-        new_path = os.path.join(save_path, new_filename)
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Input image not found: {image_path}")
 
-        # Save the processed image
-        gray_img.save(new_path)
-    
-    return new_path
+    try:
+        # Open image
+        with Image.open(image_path) as img:
+            # Convert RGB to grayscale
+            gray_img = img.convert('L')
 
-def resize_image(image_path, save_path, ratio, resize_type=1):
+            # Invert if requested
+            if invert:
+                gray_img = ImageOps.invert(gray_img)
+
+            # Generate new filename
+            new_filename = "grayscale.png"
+            new_path = os.path.join(save_path, new_filename)
+
+            # Save the processed image
+            gray_img.save(new_path)
+
+        logger.info(f"Converted image to grayscale: {new_path}")
+        return new_path
+    except Exception as e:
+        logger.error(f"Failed to convert image to grayscale: {e}")
+        raise IOError(f"Failed to convert image to grayscale: {e}")
+
+def resize_image(image_path: str, save_path: str, ratio: Tuple[int, int], resize_type: int = 1) -> str:
     """
     Resizes image into target ratio with selected resizing method.
-    
+
     Args:
-        image_path (str): Input image file path
-        save_path (str): Directory to save the processed image
-        ratio (tuple): Target width and height
-        resize_type (int): Resize method (1=Crop, 2=Pad, 3=Stretch)
-    
+        image_path: Input image file path
+        save_path: Directory to save the processed image
+        ratio: Target (width, height)
+        resize_type: Resize method (1=Crop, 2=Pad, 3=Stretch)
+
     Returns:
-        str: Path of the resized image
+        Path of the resized image
+
+    Raises:
+        FileNotFoundError: If input image does not exist
+        ValueError: If invalid resize_type or dimensions
+        IOError: If image cannot be processed or saved
     """
-    # Open image
-    with Image.open(image_path) as img:
-        # Get original image size
-        orig_width, orig_height = img.size
-        # Get target image size(ratio)
-        target_width, target_height = ratio
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Input image not found: {image_path}")
 
-        if resize_type == 1:  # Cropping (Centered)
-            # Calculate scaling factors
-            target_ratio = target_width / target_height
-            current_ratio = orig_width / orig_height
+    target_width, target_height = ratio
 
-            if current_ratio > target_ratio:
-                # Wider than target aspect ratio
-                new_width = int(orig_height * target_ratio)
-                left = (orig_width - new_width) // 2
-                right = left + new_width
-                top = 0
-                bottom = orig_height
-            else:
-                # Taller than target aspect ratio
-                new_height = int(orig_width / target_ratio)
-                left = 0
-                right = orig_width
-                top = (orig_height - new_height) // 2
-                bottom = top + new_height
+    # Validate dimensions
+    if target_width <= 0 or target_height <= 0:
+        raise ValueError(f"Invalid dimensions: {ratio}. Width and height must be positive.")
 
-            resized_img = img.crop((left, top, right, bottom))
-            resized_img = resized_img.resize((target_width, target_height), Image.LANCZOS)
-        
-        elif resize_type == 2:  # Padding (Centered)
-            # Calculate scaling factors
-            target_ratio = target_width / target_height
-            current_ratio = orig_width / orig_height
-            
-            if current_ratio > target_ratio:
-                # Wider than target aspect ratio
-                new_width = orig_width
-                new_height = int(orig_width / target_ratio)
-            else:
-                # Taller than target aspect ratio
-                new_width = int(orig_height * target_ratio)
-                new_height = orig_height
+    if resize_type not in (1, 2, 3):
+        raise ValueError(f"Invalid resize type: {resize_type}. Must be 1 (Crop), 2 (Pad), or 3 (Stretch).")
 
-            pad_left = (new_width - orig_width) // 2
-            pad_right = new_width - orig_width - pad_left
-            pad_top = (new_height - orig_height) // 2
-            pad_bottom = new_height - orig_height - pad_top
+    try:
+        # Open image
+        with Image.open(image_path) as img:
+            # Get original image size
+            orig_width, orig_height = img.size
 
-            resized_img = ImageOps.expand(img, (pad_left, pad_top, pad_right, pad_bottom))
-            resized_img = resized_img.resize((target_width, target_height), Image.LANCZOS)
+            if orig_width == 0 or orig_height == 0:
+                raise ValueError(f"Invalid image dimensions: {orig_width}x{orig_height}")
 
-        elif resize_type == 3:  # Stretching
-            resized_img = img.resize((target_width, target_height), Image.LANCZOS)
-        
-        else:
-            raise ValueError("Invalid resize type. Must be 1, 2, or 3.")
+            if resize_type == 1:  # Cropping (Centered)
+                resized_img = _crop_image(img, target_width, target_height, orig_width, orig_height)
 
-        # Generate new filename
-        directory, filename = os.path.split(image_path)
-        name, ext = os.path.splitext(filename)
-        new_filename = f"{name}_resized{ext}"
-        new_path = os.path.join(save_path, new_filename)
+            elif resize_type == 2:  # Padding (Centered)
+                resized_img = _pad_image(img, target_width, target_height, orig_width, orig_height)
 
-        # Check if filename already exists and modify if necessary
-        counter = 1
-        while os.path.exists(new_path):
-            new_filename = f"{name}_resized({counter}){ext}"
+            elif resize_type == 3:  # Stretching
+                resized_img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+            # Generate new filename
+            _, filename = os.path.split(image_path)
+            name, ext = os.path.splitext(filename)
+            new_filename = f"{name}_resized{ext}"
             new_path = os.path.join(save_path, new_filename)
-            counter += 1
-        
-        # Save the resized image
-        resized_img.save(new_path)
 
-    return new_path
+            # Check if filename already exists and modify if necessary
+            counter = 1
+            while os.path.exists(new_path):
+                new_filename = f"{name}_resized({counter}){ext}"
+                new_path = os.path.join(save_path, new_filename)
+                counter += 1
 
-def grayscale_to_lithophane(input_filepath, output_filepath=None, 
-                           base_height=2.0, max_height=4.0, 
-                           min_thickness=0.5):
+            # Save the resized image
+            resized_img.save(new_path)
+
+        logger.info(f"Resized image saved: {new_path}")
+        return new_path
+    except Exception as e:
+        logger.error(f"Failed to resize image: {e}")
+        raise IOError(f"Failed to resize image: {e}")
+
+
+def _crop_image(img: Image.Image, target_width: int, target_height: int,
+                orig_width: int, orig_height: int) -> Image.Image:
+    """Crop image to target aspect ratio (centered)."""
+    target_ratio = target_width / target_height
+    current_ratio = orig_width / orig_height
+
+    if current_ratio > target_ratio:
+        # Wider than target aspect ratio
+        new_width = int(orig_height * target_ratio)
+        left = (orig_width - new_width) // 2
+        right = left + new_width
+        top = 0
+        bottom = orig_height
+    else:
+        # Taller than target aspect ratio
+        new_height = int(orig_width / target_ratio)
+        left = 0
+        right = orig_width
+        top = (orig_height - new_height) // 2
+        bottom = top + new_height
+
+    cropped_img = img.crop((left, top, right, bottom))
+    return cropped_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+
+def _pad_image(img: Image.Image, target_width: int, target_height: int,
+               orig_width: int, orig_height: int) -> Image.Image:
+    """Pad image to target aspect ratio (centered)."""
+    target_ratio = target_width / target_height
+    current_ratio = orig_width / orig_height
+
+    if current_ratio > target_ratio:
+        # Wider than target aspect ratio
+        new_width = orig_width
+        new_height = int(orig_width / target_ratio)
+    else:
+        # Taller than target aspect ratio
+        new_width = int(orig_height * target_ratio)
+        new_height = orig_height
+
+    pad_left = (new_width - orig_width) // 2
+    pad_right = new_width - orig_width - pad_left
+    pad_top = (new_height - orig_height) // 2
+    pad_bottom = new_height - orig_height - pad_top
+
+    padded_img = ImageOps.expand(img, (pad_left, pad_top, pad_right, pad_bottom))
+    return padded_img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+
+def grayscale_to_lithophane(input_filepath: str, output_filepath: Optional[str] = None,
+                           base_height: float = DEFAULT_BASE_HEIGHT,
+                           max_height: float = DEFAULT_MAX_HEIGHT,
+                           min_thickness: float = DEFAULT_MIN_THICKNESS) -> str:
     """
     Convert a grayscale image to a lithophane STL file.
-    
+
     Parameters:
-    -----------
-    input_filepath : str
-        Path to input grayscale image file
-    output_filepath : str, optional
-        Path for output STL file. If None, uses input path with .stl extension
-    base_height : float, optional
-        Base height of the lithophane in mm (default: 2.0)
-    max_height : float, optional
-        Maximum additional height from base in mm (default: 4.0)
-    min_thickness : float, optional
-        Minimum thickness of thinnest parts in mm (default: 0.5)
-        
+        input_filepath: Path to input grayscale image file
+        output_filepath: Path for output STL file. If None, uses input path with .stl extension
+        base_height: Base height of the lithophane in mm
+        max_height: Maximum additional height from base in mm
+        min_thickness: Minimum thickness of thinnest parts in mm
+
     Returns:
-    --------
-    str
         Path to the generated STL file
+
+    Raises:
+        FileNotFoundError: If input file does not exist
+        ValueError: If invalid parameters provided
+        IOError: If mesh cannot be created or saved
     """
     # Verify input file exists
     if not os.path.exists(input_filepath):
         raise FileNotFoundError(f"Input file not found: {input_filepath}")
-        
+
+    # Validate parameters
+    if base_height <= 0 or max_height <= 0 or min_thickness <= 0:
+        raise ValueError("All height parameters must be positive")
+
     # Set output filepath if not provided
     if output_filepath is None:
         output_filepath = os.path.splitext(input_filepath)[0] + '.stl'
+
+    try:
+        # Read and verify grayscale image
+        with Image.open(input_filepath) as img:
+            if img.mode != 'L':
+                img = img.convert('L')
+
+            # Convert image to numpy array and normalize to [0, 1]
+            img_array = np.array(img).astype(float) / 255.0
     
-    # Read and verify grayscale image
-    img = Image.open(input_filepath)
-    if img.mode != 'L':
-        img = img.convert('L')
-    
-    # Convert image to numpy array and normalize to [0, 1]
-    img_array = np.array(img).astype(float) / 255.0
-    
-    # Get image dimensions
-    height, width = img_array.shape
-    
-    # Create vertices and faces for the top surface
-    top_vertices = []
-    top_faces = []
-    vertex_count = 0
-    
-    # Generate vertices for the top surface
-    for y in range(height):
-        for x in range(width):
-            z = base_height + (1 - img_array[y, x]) * max_height + min_thickness
-            top_vertices.append([x, y, z])
-    
-    # Generate faces for the top surface
-    for y in range(height - 1):
+        # Get image dimensions
+        height, width = img_array.shape
+
+        # --- Vectorized Vertex Creation ---
+
+        # Create a grid of x, y coordinates
+        x = np.arange(width)
+        y = np.arange(height)
+        xx, yy = np.meshgrid(x, y)
+
+        # Calculate z coordinates for the top surface
+        z_top = base_height + (1 - img_array) * max_height + min_thickness
+
+        # Create top and bottom vertices
+        top_vertices = np.stack([xx.ravel(), yy.ravel(), z_top.ravel()], axis=1)
+        bottom_vertices = np.stack([xx.ravel(), yy.ravel(), np.zeros_like(z_top).ravel()], axis=1)
+
+        all_vertices = np.vstack([top_vertices, bottom_vertices])
+
+        # --- Vectorized Face Creation ---
+
+        # Create indices for the grid
+        i = np.arange(height * width).reshape(height, width)
+
+        # Top faces
+        v1_top = i[:-1, :-1].ravel()
+        v2_top = i[:-1, 1:].ravel()
+        v3_top = i[1:, :-1].ravel()
+        v4_top = i[1:, 1:].ravel()
+
+        top_faces = np.vstack([
+            np.stack([v1_top, v2_top, v3_top], axis=1),
+            np.stack([v2_top, v4_top, v3_top], axis=1)
+        ])
+
+        # Bottom faces (inverted)
+        bottom_faces = np.vstack([
+            np.stack([v1_top, v3_top, v2_top], axis=1),
+            np.stack([v2_top, v3_top, v4_top], axis=1)
+        ]) + (height * width)
+
+        # Side faces
+        side_faces = []
+
+        # Front and back walls
         for x in range(width - 1):
-            # Get vertex indices for current quad
-            v1 = y * width + x
+            # Front
+            v1 = x
+            v2 = x + 1
+            v3 = v1 + height * width
+            v4 = v2 + height * width
+            side_faces.extend([[v1, v3, v2], [v2, v3, v4]])
+
+            # Back
+            v1 = (height - 1) * width + x
             v2 = v1 + 1
-            v3 = (y + 1) * width + x
-            v4 = v3 + 1
-            
-            # Create two triangles
-            top_faces.append([v1, v2, v3])
-            top_faces.append([v2, v4, v3])
-    
-    top_vertices = np.array(top_vertices)
-    top_faces = np.array(top_faces)
-    
-    # Create bottom surface vertices (at z=0)
-    bottom_vertices = np.array([[x, y, 0] for y in range(height) for x in range(width)])
-    
-    # Create bottom surface faces (inverted orientation compared to top)
-    bottom_faces = []
-    for y in range(height - 1):
-        for x in range(width - 1):
-            v1 = y * width + x
-            v2 = v1 + 1
-            v3 = (y + 1) * width + x
-            v4 = v3 + 1
-            
-            bottom_faces.append([v1, v3, v2])
-            bottom_faces.append([v2, v3, v4])
-    
-    bottom_faces = np.array(bottom_faces)
-    
-    # Create side walls
-    side_faces = []
-    
-    # Front and back walls
-    for x in range(width - 1):
-        # Front wall
-        v1 = x
-        v2 = x + 1
-        v3 = x + len(top_vertices)
-        v4 = v3 + 1
-        side_faces.extend([[v1, v3, v2], [v2, v3, v4]])
-        
-        # Back wall
-        v1 = x + (height - 1) * width
-        v2 = v1 + 1
-        v3 = v1 + len(top_vertices)
-        v4 = v3 + 1
-        side_faces.extend([[v1, v2, v3], [v2, v4, v3]])
-    
-    # Left and right walls
-    for y in range(height - 1):
-        # Left wall
-        v1 = y * width
-        v2 = (y + 1) * width
-        v3 = v1 + len(top_vertices)
-        v4 = v2 + len(top_vertices)
-        side_faces.extend([[v1, v3, v2], [v2, v3, v4]])
-        
-        # Right wall
-        v1 = (y + 1) * width - 1
-        v2 = (y + 2) * width - 1
-        v3 = v1 + len(top_vertices)
-        v4 = v2 + len(top_vertices)
-        side_faces.extend([[v1, v2, v3], [v2, v4, v3]])
-    
-    side_faces = np.array(side_faces)
-    
-    # Combine all vertices and adjust faces indices
-    all_vertices = np.vstack([top_vertices, bottom_vertices])
-    all_faces = np.vstack([
-        top_faces,
-        bottom_faces + len(top_vertices),
-        side_faces
-    ])
-    
-    # Create the final mesh
-    lithophane = mesh.Mesh(np.zeros(len(all_faces), dtype=mesh.Mesh.dtype))
-    
-    # Add vertices for each face
-    for i in range(len(all_faces)):
-        for j in range(3):
-            lithophane.vectors[i][j] = all_vertices[all_faces[i][j]]
-    
-    # Save the mesh
-    lithophane.save(output_filepath)
-    
-    return output_filepath
+            v3 = v1 + height * width
+            v4 = v2 + height * width
+            side_faces.extend([[v1, v2, v3], [v2, v4, v3]])
+
+        # Left and right walls
+        for y in range(height - 1):
+            # Left
+            v1 = y * width
+            v2 = (y + 1) * width
+            v3 = v1 + height * width
+            v4 = v2 + height * width
+            side_faces.extend([[v1, v3, v2], [v2, v3, v4]])
+
+            # Right
+            v1 = y * width + width - 1
+            v2 = (y + 1) * width + width - 1
+            v3 = v1 + height * width
+            v4 = v2 + height * width
+            side_faces.extend([[v1, v2, v3], [v2, v4, v3]])
+
+        all_faces = np.vstack([top_faces, bottom_faces, np.array(side_faces)])
+
+        # --- Mesh Creation ---
+
+        # Create the mesh
+        lithophane_mesh = mesh.Mesh(np.zeros(all_faces.shape[0], dtype=mesh.Mesh.dtype))
+
+        # Assign vertices to the mesh
+        lithophane_mesh.vectors = all_vertices[all_faces]
+
+        # Save the mesh
+        lithophane_mesh.save(output_filepath)
+
+        logger.info(f"Lithophane STL saved: {output_filepath}")
+        return output_filepath
+    except Exception as e:
+        logger.error(f"Failed to generate lithophane: {e}")
+        raise IOError(f"Failed to generate lithophane: {e}")
 
 class LithophaneGenerator(QMainWindow):
-    def __init__(self, parent=None):
-        super(LithophaneGenerator, self).__init__(parent)
+    """Main application window for lithophane generation."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
         self.setWindowTitle("Lithophane Generator")
         self.resize(1200, 800)
 
         # Initialize variables
-        self.current_image_path = None
-        self.processed_image_path = None
-        self.stl_path = None
-        
+        self.current_image_path: Optional[str] = None
+        self.processed_image_path: Optional[str] = None
+        self.stl_path: Optional[str] = None
+        self.preview_timer: Optional[QTimer] = None
+
         # Create temporary directory in a safe location
         try:
             # Get system temp directory
@@ -298,9 +354,12 @@ class LithophaneGenerator(QMainWindow):
             self.temp_dir = os.path.join(system_temp, unique_folder)
             # Create directory
             os.makedirs(self.temp_dir, exist_ok=True)
+            logger.info(f"Created temporary directory: {self.temp_dir}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to create temporary directory: {str(e)}")
-            self.temp_dir = None
+            error_msg = f"Failed to create temporary directory: {str(e)}\n\nThe application will now exit."
+            logger.critical(error_msg)
+            QMessageBox.critical(self, "Critical Error", error_msg)
+            sys.exit(1)
 
         # Create the main widget and layout
         self.central_widget = QWidget()
@@ -342,11 +401,11 @@ class LithophaneGenerator(QMainWindow):
         # Width and height inputs
         size_layout = QHBoxLayout()
         self.width_spin = QSpinBox()
-        self.width_spin.setRange(1, 1000)
-        self.width_spin.setValue(100)
+        self.width_spin.setRange(MIN_DIMENSION, MAX_DIMENSION)
+        self.width_spin.setValue(DEFAULT_WIDTH)
         self.height_spin = QSpinBox()
-        self.height_spin.setRange(1, 1000)
-        self.height_spin.setValue(100)
+        self.height_spin.setRange(MIN_DIMENSION, MAX_DIMENSION)
+        self.height_spin.setValue(DEFAULT_HEIGHT)
         size_layout.addWidget(QLabel("Width:"))
         size_layout.addWidget(self.width_spin)
         size_layout.addWidget(QLabel("Height:"))
@@ -361,6 +420,15 @@ class LithophaneGenerator(QMainWindow):
         resize_group.setLayout(resize_layout)
         left_layout.addWidget(resize_group)
 
+        # Connect signals for live preview with debouncing
+        self.preview_timer = QTimer()
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.timeout.connect(self._do_update_preview)
+
+        self.width_spin.valueChanged.connect(self._schedule_preview_update)
+        self.height_spin.valueChanged.connect(self._schedule_preview_update)
+        self.resize_method.currentIndexChanged.connect(self._schedule_preview_update)
+
         # Lithophane parameters
         param_group = QGroupBox("Lithophane Parameters")
         param_layout = QVBoxLayout()
@@ -369,7 +437,7 @@ class LithophaneGenerator(QMainWindow):
         base_layout = QHBoxLayout()
         self.base_height = QDoubleSpinBox()
         self.base_height.setRange(0.1, 10.0)
-        self.base_height.setValue(2.0)
+        self.base_height.setValue(DEFAULT_BASE_HEIGHT)
         self.base_height.setSingleStep(0.1)
         base_layout.addWidget(QLabel("Base Height (mm):"))
         base_layout.addWidget(self.base_height)
@@ -379,7 +447,7 @@ class LithophaneGenerator(QMainWindow):
         max_layout = QHBoxLayout()
         self.max_height = QDoubleSpinBox()
         self.max_height.setRange(0.1, 20.0)
-        self.max_height.setValue(4.0)
+        self.max_height.setValue(DEFAULT_MAX_HEIGHT)
         self.max_height.setSingleStep(0.1)
         max_layout.addWidget(QLabel("Max Height (mm):"))
         max_layout.addWidget(self.max_height)
@@ -389,7 +457,7 @@ class LithophaneGenerator(QMainWindow):
         min_layout = QHBoxLayout()
         self.min_thickness = QDoubleSpinBox()
         self.min_thickness.setRange(0.1, 5.0)
-        self.min_thickness.setValue(0.5)
+        self.min_thickness.setValue(DEFAULT_MIN_THICKNESS)
         self.min_thickness.setSingleStep(0.1)
         min_layout.addWidget(QLabel("Min Thickness (mm):"))
         min_layout.addWidget(self.min_thickness)
@@ -418,7 +486,7 @@ class LithophaneGenerator(QMainWindow):
         preview_group = QGroupBox("Image Preview")
         preview_layout = QVBoxLayout()
         self.preview_label = QLabel()
-        self.preview_label.setMinimumSize(300, 300)
+        self.preview_label.setMinimumSize(PREVIEW_SIZE, PREVIEW_SIZE)
         self.preview_label.setAlignment(Qt.AlignCenter)
         preview_layout.addWidget(self.preview_label)
         preview_group.setLayout(preview_layout)
@@ -453,46 +521,92 @@ class LithophaneGenerator(QMainWindow):
 
         self.stl_actor = None
 
-    def load_image(self):
+    def load_image(self) -> None:
+        """Load an image file selected by the user."""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp *.tiff)")
-        
+
         if file_path:
             self.current_image_path = file_path
             self.image_label.setText(os.path.basename(file_path))
-            
-            # Show original image in preview
-            self.update_image_preview(file_path)
-            
+            logger.info(f"Loaded image: {file_path}")
+
+            # Show processed preview
+            self._schedule_preview_update()
+
             # Enable convert button
             self.convert_button.setEnabled(True)
             # Disable export button until new conversion
             self.export_button.setEnabled(False)
 
-    def update_image_preview(self, image_path):
-        # Load and resize image for preview
-        img = Image.open(image_path)
-        img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-        
-        # Convert PIL image to QPixmap
-        if img.mode == "RGB":
-            qim = QImage(img.tobytes("raw", "RGB"), img.size[0], img.size[1], QImage.Format_RGB888)
-        else:  # Grayscale
-            qim = QImage(img.tobytes("raw", "L"), img.size[0], img.size[1], QImage.Format_Grayscale8)
-        
-        pixmap = QPixmap.fromImage(qim)
-        self.preview_label.setPixmap(pixmap)
+    def update_image_preview(self, image_path: str) -> None:
+        """Update the preview label with the given image."""
+        try:
+            with Image.open(image_path) as img:
+                # Create a copy for thumbnail to avoid modifying original
+                img_copy = img.copy()
+                img_copy.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE), Image.Resampling.LANCZOS)
 
-    def convert_to_lithophane(self):
+                # Convert PIL image to QPixmap
+                if img_copy.mode == "RGB":
+                    qim = QImage(img_copy.tobytes("raw", "RGB"), img_copy.size[0], img_copy.size[1], QImage.Format_RGB888)
+                else:  # Grayscale
+                    qim = QImage(img_copy.tobytes("raw", "L"), img_copy.size[0], img_copy.size[1], img_copy.size[0], QImage.Format_Grayscale8)
+
+                pixmap = QPixmap.fromImage(qim)
+                self.preview_label.setPixmap(pixmap)
+        except Exception as e:
+            logger.error(f"Failed to update image preview: {e}")
+            self.preview_label.setText("Preview unavailable")
+
+    def _schedule_preview_update(self) -> None:
+        """Schedule a preview update with debouncing."""
+        if self.preview_timer:
+            self.preview_timer.stop()
+            self.preview_timer.start(PREVIEW_DEBOUNCE_MS)
+
+    def _do_update_preview(self) -> None:
+        """Actually perform the preview update (called after debounce timer)."""
         if not self.current_image_path:
             return
 
         try:
-            # Convert to grayscale
-            gray_path = os.path.join(self.temp_dir, "grayscale.png")
-            gray_img = rgb2gray(self.current_image_path, self.temp_dir, invert=False)
+            # Convert to grayscale (use the returned path!)
+            gray_path = rgb2gray(self.current_image_path, self.temp_dir, invert=False)
 
-            # Resize image
+            # Resize image (use the returned path!)
+            resize_type = self.resize_method.currentIndex() + 1
+            ratio = (self.width_spin.value(), self.height_spin.value())
+            resized_preview_path = resize_image(gray_path, self.temp_dir, ratio, resize_type)
+
+            self.update_image_preview(resized_preview_path)
+
+        except Exception as e:
+            logger.error(f"Error updating processed preview: {e}")
+            # Revert to original image preview
+            if self.current_image_path:
+                self.update_image_preview(self.current_image_path)
+            else:
+                self.preview_label.setText("No image loaded")
+
+    def convert_to_lithophane(self) -> None:
+        """Convert the current image to a lithophane STL file."""
+        if not self.current_image_path:
+            return
+
+        # Create progress dialog
+        progress = QProgressDialog("Converting to lithophane...", "Cancel", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            # Convert to grayscale (use the returned path!)
+            gray_path = rgb2gray(self.current_image_path, self.temp_dir, invert=False)
+
+            # Resize image (use the returned path!)
             resize_type = self.resize_method.currentIndex() + 1
             ratio = (self.width_spin.value(), self.height_spin.value())
             resized_path = resize_image(gray_path, self.temp_dir, ratio, resize_type)
@@ -504,7 +618,7 @@ class LithophaneGenerator(QMainWindow):
             # Convert to lithophane
             self.stl_path = os.path.join(self.temp_dir, "lithophane.stl")
             grayscale_to_lithophane(
-                resized_path, 
+                resized_path,
                 self.stl_path,
                 base_height=self.base_height.value(),
                 max_height=self.max_height.value(),
@@ -513,67 +627,89 @@ class LithophaneGenerator(QMainWindow):
 
             # Update 3D preview
             self.load_stl_to_viewer(self.stl_path)
-            
+
             # Enable export button
             self.export_button.setEnabled(True)
 
+            progress.close()
+            logger.info("Lithophane conversion completed successfully")
+
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
+            progress.close()
+            error_msg = f"Failed to convert to lithophane:\n{str(e)}"
+            logger.error(error_msg)
+            QMessageBox.critical(self, "Conversion Error", error_msg)
 
-    def load_stl_to_viewer(self, stl_path):
-        # Remove existing STL actor if it exists
-        if self.stl_actor:
-            self.renderer.RemoveActor(self.stl_actor)
+    def load_stl_to_viewer(self, stl_path: str) -> None:
+        """Load and display an STL file in the 3D viewer."""
+        try:
+            # Remove existing STL actor if it exists
+            if self.stl_actor:
+                self.renderer.RemoveActor(self.stl_actor)
 
-        # Create STL reader
-        reader = vtk.vtkSTLReader()
-        reader.SetFileName(stl_path)
+            # Create STL reader
+            reader = vtk.vtkSTLReader()
+            reader.SetFileName(stl_path)
 
-        # Create mapper
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(reader.GetOutputPort())
+            # Create mapper
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(reader.GetOutputPort())
 
-        # Create actor
-        self.stl_actor = vtk.vtkActor()
-        self.stl_actor.SetMapper(mapper)
-        
-        # Add actor to renderer
-        self.renderer.AddActor(self.stl_actor)
-        
-        # Reset camera to fit the new model
-        self.renderer.ResetCamera()
-        self.vtk_widget.GetRenderWindow().Render()
+            # Create actor
+            self.stl_actor = vtk.vtkActor()
+            self.stl_actor.SetMapper(mapper)
 
-    def export_stl(self):
+            # Add actor to renderer
+            self.renderer.AddActor(self.stl_actor)
+
+            # Reset camera to fit the new model
+            self.renderer.ResetCamera()
+            self.vtk_widget.GetRenderWindow().Render()
+
+            logger.info(f"Loaded STL to viewer: {stl_path}")
+        except Exception as e:
+            logger.error(f"Failed to load STL to viewer: {e}")
+            raise
+
+    def export_stl(self) -> None:
+        """Export the generated STL file to a user-selected location."""
         if not self.stl_path:
             return
 
         save_path, _ = QFileDialog.getSaveFileName(
             self, "Save STL File", "", "STL Files (*.stl)")
-        
+
         if save_path:
             if not save_path.lower().endswith('.stl'):
                 save_path += '.stl'
-            
-            try:
-                # Copy STL file to selected location
-                with open(self.stl_path, 'rb') as src, open(save_path, 'wb') as dst:
-                    dst.write(src.read())
-                QMessageBox.information(self, "Success", "STL file saved successfully!")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save STL file: {str(e)}")
 
-    def closeEvent(self, event):
+            try:
+                # Use shutil for efficient file copying
+                shutil.copyfile(self.stl_path, save_path)
+                logger.info(f"STL file exported to: {save_path}")
+                QMessageBox.information(self, "Export Successful",
+                                      f"STL file saved successfully to:\n{save_path}")
+            except Exception as e:
+                error_msg = f"Failed to save STL file:\n{str(e)}"
+                logger.error(error_msg)
+                QMessageBox.critical(self, "Export Error", error_msg)
+
+    def closeEvent(self, event) -> None:
+        """Clean up resources when closing the application."""
         # Cleanup temporary files
-        import shutil
         try:
-            if os.path.exists(self.temp_dir):
+            if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
                 shutil.rmtree(self.temp_dir)
+                logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
         except Exception as e:
-            print(f"Error cleaning up temporary files: {e}")
+            logger.warning(f"Error cleaning up temporary files: {e}")
 
         # Properly close the VTK widget
-        self.vtk_widget.Finalize()
+        try:
+            self.vtk_widget.Finalize()
+        except Exception as e:
+            logger.warning(f"Error finalizing VTK widget: {e}")
+
         super().closeEvent(event)
 
 if __name__ == "__main__":
