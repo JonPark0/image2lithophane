@@ -105,3 +105,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Build artifacts
+*.exe
+*.app
+*.zip
+*.tar.gz

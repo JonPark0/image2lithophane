@@ -184,11 +184,6 @@ image2lithophane/
 *   **NumPy**: 고성능 벡터화 연산
 *   **numpy-stl**: STL 파일 생성 및 메시 관리
 
-### 코드 품질
-*   **Type Hints**: 전체 코드베이스에 타입 주석 적용
-*   **Logging**: Python logging 모듈을 사용한 체계적인 로깅
-*   **Error Handling**: 견고한 예외 처리 및 사용자 친화적 오류 메시지
-
 ---
 
 ## FAQ
@@ -250,3 +245,131 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
     rmdir /s /q venv
     setup.bat
     ```
+---
+
+## 실행 파일(EXE) 빌드 방법
+
+프로그램을 단일 실행 파일로 빌드할 수 있습니다. 이렇게 하면 Python을 설치하지 않은 사용자도 프로그램을 사용할 수 있습니다.
+
+### 로컬에서 빌드
+
+#### Windows (권장)
+
+**방법 1: 배치 스크립트 사용**
+```cmd
+build.bat
+```
+
+**방법 2: PowerShell 스크립트 사용**
+```powershell
+.\build.ps1
+```
+
+**방법 3: 수동 빌드**
+```bash
+# 가상환경 활성화
+venv\Scripts\activate
+
+# PyInstaller 설치
+pip install pyinstaller
+
+# 빌드 실행
+pyinstaller --name="LithophaneGenerator" ^
+    --windowed ^
+    --onefile ^
+    --add-data="README.md;." ^
+    --hidden-import=vtkmodules ^
+    --hidden-import=vtkmodules.all ^
+    --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor ^
+    --hidden-import=vtkmodules.util ^
+    --hidden-import=vtkmodules.util.numpy_support ^
+    --collect-all=vtk ^
+    --collect-all=vtkmodules ^
+    viewer.py
+```
+
+빌드가 완료되면 `dist\LithophaneGenerator.exe` 파일이 생성됩니다.
+
+#### macOS
+
+```bash
+# 가상환경 활성화
+source venv/bin/activate
+
+# PyInstaller 설치
+pip install pyinstaller
+
+# 빌드 실행
+pyinstaller --name="LithophaneGenerator" \
+    --windowed \
+    --onefile \
+    --add-data="README.md:." \
+    --hidden-import=vtkmodules \
+    --hidden-import=vtkmodules.all \
+    --hidden-import=vtkmodules.qt.QVTKRenderWindowInteractor \
+    --hidden-import=vtkmodules.util \
+    --hidden-import=vtkmodules.util.numpy_support \
+    --collect-all=vtk \
+    --collect-all=vtkmodules \
+    viewer.py
+```
+
+빌드가 완료되면 `dist/LithophaneGenerator.app` 파일이 생성됩니다.
+
+### 빌드 파일 크기
+- Windows: 약 150-200MB
+- macOS: 약 150-200MB
+
+> **참고**: 파일 크기가 큰 이유는 Python 인터프리터, VTK, PyQt5 등 모든 의존성이 포함되기 때문입니다.
+
+---
+
+## GitHub Actions를 통한 자동 릴리스
+
+이 프로젝트는 GitHub Actions를 통해 자동으로 빌드하고 릴리스를 생성하도록 설정되어 있습니다.
+
+### 릴리스 생성 방법
+
+1. **버전 태그 생성**
+   ```bash
+   git tag -a v1.0.0 -m "Release version 1.0.0"
+   git push origin v1.0.0
+   ```
+
+2. **자동 빌드**
+   - 태그가 푸시되면 GitHub Actions가 자동으로 실행됩니다
+   - Windows와 macOS 버전이 동시에 빌드됩니다
+   - 빌드 진행 상황은 GitHub의 "Actions" 탭에서 확인할 수 있습니다
+
+3. **릴리스 확인**
+   - 빌드가 완료되면 자동으로 Release가 생성됩니다
+   - `https://github.com/your-username/image2lithophane/releases`에서 확인
+   - 생성된 파일:
+     - `LithophaneGenerator-Windows-1.0.0.zip`
+     - `LithophaneGenerator-macOS-1.0.0.zip`
+
+### 수동 빌드 트리거
+
+GitHub Actions 탭에서 "Build and Release" workflow를 수동으로 실행할 수도 있습니다:
+1. GitHub 저장소의 "Actions" 탭 이동
+2. "Build and Release" workflow 선택
+3. "Run workflow" 버튼 클릭
+
+### 릴리스 파일 다운로드
+
+사용자는 다음 위치에서 최신 릴리스를 다운로드할 수 있습니다:
+```
+https://github.com/your-username/image2lithophane/releases/latest
+```
+
+### 버전 관리 규칙
+
+- **메이저 버전** (v1.0.0 → v2.0.0): 주요 기능 추가 또는 호환성 깨지는 변경
+- **마이너 버전** (v1.0.0 → v1.1.0): 새로운 기능 추가
+- **패치 버전** (v1.0.0 → v1.0.1): 버그 수정
+
+---
+
+## 라이선스
+
+이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참조하세요.
