@@ -116,3 +116,95 @@ dist/
 *.app
 *.zip
 *.tar.gz
+*.dmg
+*.deb
+*.rpm
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.tox/
+
+# Temporary files created by the app
+*.tmp
+*.temp
+*.bak
+*.old
+
+# STL files (user-generated lithophane outputs)
+# Uncomment if you don't want to track example STL files
+# *.stl
+
+# Image test files (if you add test images)
+# test_images/
+# samples/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Project specific
+# Temporary lithophane processing files
+*.lithophane.tmp
+grayscale*.png
+*_resized*.png

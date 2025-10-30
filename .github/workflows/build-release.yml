@@ -6,6 +6,9 @@ on:
       - 'v*'  # Triggers on version tags like v1.0.0, v2.0.1, etc.
   workflow_dispatch:  # Allows manual trigger from GitHub Actions tab
 
+permissions:
+  contents: write  # Required for creating releases and uploading assets
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -30,7 +33,6 @@ jobs:
         pyinstaller --name="LithophaneGenerator" `
           --windowed `
           --onefile `
-          --icon=NONE `
           --add-data="README.md;." `
           --hidden-import=vtkmodules `
           --hidden-import=vtkmodules.all `
@@ -123,7 +125,6 @@ jobs:
         pyinstaller --name="LithophaneGenerator" \
           --windowed \
           --onefile \
-          --icon=NONE \
           --add-data="README.md:." \
           --hidden-import=vtkmodules \
           --hidden-import=vtkmodules.all \

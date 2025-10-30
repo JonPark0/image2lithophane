@@ -76,7 +76,6 @@ Write-Host ""
 pyinstaller --name="LithophaneGenerator" `
     --windowed `
     --onefile `
-    --icon=NONE `
     --add-data="README.md;." `
     --hidden-import=vtkmodules `
     --hidden-import=vtkmodules.all `
